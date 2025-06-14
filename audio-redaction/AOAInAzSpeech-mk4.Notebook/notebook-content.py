@@ -339,7 +339,7 @@ def analyze_and_redact_with_gpt(client: AzureOpenAI, deployment: str, transcript
     4. "piiEntities": A JSON array of objects. Each object represents a detected PII entity and must have the keys "text" (the original PII text), "category" (e.g., "Person", "PhoneNumber", "Address", "Email"), and "confidenceScore" (a float between 0.0 and 1.0).
     5. "sentenceSentiments": A JSON array of objects. Each object represents a sentence from the transcript and must have the keys "sentenceText", "sentiment" ("Positive", "Negative", "Neutral"), and "scores" (an object with "positive", "neutral", and "negative" float values).
 
-    IMPORTANT: Pay special attention to PII that is spelled out loud (e.g., "My name is J-O-H-N S-M-I-T-H" or "it's S-U-L-L-I-V-A-N"). You must identify the spelled-out text as PII and redact it correctly in the "piiRedactedText" field.
+    IMPORTANT: Pay special attention to PII that is spelled out loud (e.g., "My name is J-O-H-N S-M-I-T-H" or "J-A-M-E-S S-U-L-L-I-V-A-N"). You must identify the spelled-out text as PII and redact it correctly in the "piiRedactedText" field.
 
     Analyze the following transcript carefully and provide the complete JSON output as requested.
     """
@@ -425,52 +425,67 @@ with tempfile.TemporaryDirectory() as temp_dir:
         transcription_id = str(uuid.uuid4())
         is_successful = False
 
+        # Initialize timing variables
+        transcription_time_seconds = 0.0
+        analysis_time_seconds = 0.0
+
         try:
-            # --- 1. Transcribe Audio with Diarization ---
+            # Time the transcription call
+            start_transcribe_time = time.time()
             speech_results = transcribe_audio_with_diarization(SPEECH_KEY, SPEECH_REGION, temp_audio_file)
+            transcription_time_seconds = time.time() - start_transcribe_time
+            
             status = speech_results.get("ProcessingStatus", "UnknownError")
             is_successful = (status == "Success")
             status_details = json.dumps(speech_results.get("CancellationDetails")) if speech_results.get("CancellationDetails") else None
-            
-            # --- NEW: Format duration into HH:MM:SS ---
             duration_seconds = speech_results.get("TotalDurationInSeconds", 0.0)
             duration_hms = format_duration_hms(duration_seconds)
 
-            # --- 2. Log the outcome (always) ---
-            print(f"  [LOG] Recording outcome for '{audio_file}'. Status: {status}")
-            # --- MODIFIED: Add CallDurationHms to log ---
-            all_log_rows.append({
-                "TranscriptionId": transcription_id, "AudioFileName": audio_file, 
-                "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": status, 
-                "StatusDetails": status_details, "CallDurationHms": duration_hms
-            })
-
-            # --- 3. If Successful, Perform Enrichment ---
+            # If Successful, Perform Enrichment
             if is_successful:
                 print("  [SUCCESS] Transcription successful. Proceeding with OpenAI enrichment.")
                 language_results = {}
                 analysis_tokens = 0
                 if openai_client:
+                    # Time the analysis call
+                    start_analysis_time = time.time()
                     language_response = analyze_and_redact_with_gpt(openai_client, AZURE_OPENAI_GPT_DEPLOYMENT, speech_results.get("CombinedDisplayText", ""))
+                    analysis_time_seconds = time.time() - start_analysis_time
+
                     language_results = language_response.get("analysis", {})
                     analysis_tokens = language_response.get("tokens", 0)
                 else:
                     print("  [WARN] OpenAI client is not configured. Skipping analysis.")
 
-                # --- NEW: Identify and extract phrases containing PII ---
-                pii_phrases = []
-                pii_texts = {entity.get("text") for entity in language_results.get("piiEntities", []) if entity.get("text")}
-                if pii_texts:
+                # --- NEW: Create detailed PII list with timestamps ---
+                pii_details_with_timestamps = []
+                # Iterate through each PII entity found by the language model
+                for entity in language_results.get("piiEntities", []):
+                    pii_text = entity.get("text")
+                    if not pii_text:
+                        continue
+                    
+                    # Search for the phrase where this PII text appeared
                     for phrase in speech_results.get("RecognizedPhrases", []):
-                        # Check if any detected PII text appears in the phrase's text
-                        if any(pii_text in phrase.get("Text", "") for pii_text in pii_texts):
-                            pii_phrases.append(phrase)
+                        if pii_text in phrase.get("Text", ""):
+                            # Found the phrase, now build the desired object
+                            pii_details_with_timestamps.append({
+                                "SpeakerId": phrase.get("SpeakerId"),
+                                "PiiText": pii_text,
+                                "OffsetInTicks": phrase.get("OffsetInTicks"),
+                                "DurationInTicks": phrase.get("DurationInTicks"),
+                                "Confidence": entity.get("confidenceScore"),
+                                "PiiCategory": entity.get("category"),
+                                "AiDetectionModelUsed": "GPT"
+                            })
+                            # Once found, break to avoid creating duplicates for the same PII entity
+                            break 
                 
-                # Add the extracted PII phrases to the analysis results
-                language_results["PiiPhrases"] = pii_phrases
-                print(f"  [INFO] Found and extracted {len(pii_phrases)} phrases containing PII.")
+                # Add the new detailed list to the analysis results
+                language_results["PiiDetailsWithTimestamps"] = pii_details_with_timestamps
+                print(f"  [INFO] Created {len(pii_details_with_timestamps)} detailed records for PII entities.")
 
-                # --- MODIFIED: Populate data lists for saving to tables ---
+                # Populate data for Lakehouse tables
                 all_transcripts_rows.append({
                     "TranscriptionId": transcription_id, "AudioFileName": audio_file, "ProcessingTimestamp": datetime.utcnow(), 
                     "ProcessingStatus": status, "CallDurationSeconds": duration_seconds, "CallDurationHms": duration_hms,
@@ -491,7 +506,15 @@ with tempfile.TemporaryDirectory() as temp_dir:
                     all_key_phrases_rows.append({ "KeyPhraseId": str(uuid.uuid4()), "TranscriptionId": transcription_id, "KeyPhrase": key_phrase })
 
                 # Save the full enriched JSON file
-                full_json_output = {"transcription": speech_results, "analysis": language_results, "usage": {"analysis_total_tokens": analysis_tokens}}
+                full_json_output = {
+                    "transcription": speech_results, 
+                    "analysis": language_results, 
+                    "usage": {
+                        "analysis_total_tokens": analysis_tokens,
+                        "transcription_time_seconds": transcription_time_seconds,
+                        "analysis_time_seconds": analysis_time_seconds
+                    }
+                }
                 transcript_json_filename = f"{os.path.splitext(audio_file)[0]}_enriched_transcript.json"
                 target_json_path = os.path.join(LOCAL_TRANSCRIPTS_OUTPUT_PATH, transcript_json_filename)
                 with open(target_json_path, 'w') as f_out: json.dump(full_json_output, f_out, indent=2)
@@ -499,11 +522,26 @@ with tempfile.TemporaryDirectory() as temp_dir:
                 print(f"  [FAIL] Transcription status was '{status}'. Skipping enrichment.")
                 print(f"  [ACTION] Check the log file for details: /lakehouse/default/Files/sdk-logs/speech-sdk-{os.path.splitext(audio_file)[0]}.log")
 
+            # Log the final outcome
+            print(f"  [LOG] Recording outcome for '{audio_file}'. Status: {status}")
+            all_log_rows.append({
+                "TranscriptionId": transcription_id, "AudioFileName": audio_file, 
+                "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": status, 
+                "StatusDetails": status_details, "CallDurationHms": duration_hms,
+                "TranscriptionTimeSeconds": transcription_time_seconds,
+                "AnalysisTimeSeconds": analysis_time_seconds
+            })
 
         except Exception as e:
             print(f"  ❌ An unhandled error occurred for {audio_file}: {e}")
             if not any(log['AudioFileName'] == audio_file for log in all_log_rows):
-                all_log_rows.append({ "TranscriptionId": str(uuid.uuid4()), "AudioFileName": audio_file, "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": "PythonHardError", "StatusDetails": json.dumps({"error": str(e)}) })
+                all_log_rows.append({ 
+                    "TranscriptionId": str(uuid.uuid4()), "AudioFileName": audio_file, 
+                    "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": "PythonHardError", 
+                    "StatusDetails": json.dumps({"error": str(e)}), "CallDurationHms": "00:00:00",
+                    "TranscriptionTimeSeconds": transcription_time_seconds,
+                    "AnalysisTimeSeconds": analysis_time_seconds
+                })
             is_successful = False
 
         finally:
@@ -548,41 +586,61 @@ def save_data_to_table(data_rows, table_name, schema, spark_session):
 
 # --- MODIFIED: Define Schemas ---
 log_schema = StructType([
-    StructField("TranscriptionId", StringType(), True), StructField("AudioFileName", StringType(), True),
-    StructField("ProcessingTimestamp", TimestampType(), True), StructField("ProcessingStatus", StringType(), True),
-    StructField("StatusDetails", StringType(), True), StructField("CallDurationHms", StringType(), True) # <-- Added
+    StructField("TranscriptionId", StringType(), True), 
+    StructField("AudioFileName", StringType(), True),
+    StructField("ProcessingTimestamp", TimestampType(), True), 
+    StructField("ProcessingStatus", StringType(), True),
+    StructField("StatusDetails", StringType(), True), 
+    StructField("CallDurationHms", StringType(), True),
+    StructField("TranscriptionTimeSeconds", DoubleType(), True), # <-- Added
+    StructField("AnalysisTimeSeconds", DoubleType(), True)      # <-- Added
 ])
 
 transcripts_schema = StructType([
-    StructField("TranscriptionId", StringType(), True), StructField("AudioFileName", StringType(), True),
-    StructField("ProcessingTimestamp", TimestampType(), True), StructField("ProcessingStatus", StringType(), True),
-    StructField("CallDurationSeconds", DoubleType(), True), StructField("CallDurationHms", StringType(), True), # <-- Added
-    StructField("OverallSentiment", StringType(), True), StructField("PiiRedactedText", StringType(), True), 
-    StructField("TotalTokens", LongType(), True), StructField("LakehouseTranscriptPath", StringType(), True)
+    StructField("TranscriptionId", StringType(), True), 
+    StructField("AudioFileName", StringType(), True),
+    StructField("ProcessingTimestamp", TimestampType(), True), 
+    StructField("ProcessingStatus", StringType(), True),
+    StructField("CallDurationSeconds", DoubleType(), True), 
+    StructField("CallDurationHms", StringType(), True),
+    StructField("OverallSentiment", StringType(), True), 
+    StructField("PiiRedactedText", StringType(), True), 
+    StructField("TotalTokens", LongType(), True), 
+    StructField("LakehouseTranscriptPath", StringType(), True)
 ])
 
 pii_schema = StructType([
-    StructField("PiiEntityId", StringType(), True), StructField("TranscriptionId", StringType(), True),
-    StructField("PiiText", StringType(), True), StructField("PiiCategory", StringType(), True),
-    StructField("PiiSubcategory", StringType(), True), StructField("ConfidenceScore", FloatType(), True)
+    StructField("PiiEntityId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
+    StructField("PiiText", StringType(), True), 
+    StructField("PiiCategory", StringType(), True),
+    StructField("PiiSubcategory", StringType(), True), 
+    StructField("ConfidenceScore", FloatType(), True)
 ])
 
 phrases_schema = StructType([
-    StructField("PhraseId", StringType(), True), StructField("TranscriptionId", StringType(), True),
-    StructField("SpeakerId", StringType(), True), StructField("PhraseText", StringType(), True),
-    StructField("OffsetInSeconds", DoubleType(), True), StructField("DurationInSeconds", DoubleType(), True),
+    StructField("PhraseId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
+    StructField("SpeakerId", StringType(), True), 
+    StructField("PhraseText", StringType(), True),
+    StructField("OffsetInSeconds", DoubleType(), True), 
+    StructField("DurationInSeconds", DoubleType(), True),
     StructField("Confidence", FloatType(), True)
 ])
 
 sentence_sentiments_schema = StructType([
-    StructField("SentenceId", StringType(), True), StructField("TranscriptionId", StringType(), True),
-    StructField("SentenceText", StringType(), True), StructField("Sentiment", StringType(), True),
-    StructField("PositiveScore", FloatType(), True), StructField("NeutralScore", FloatType(), True),
+    StructField("SentenceId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
+    StructField("SentenceText", StringType(), True), 
+    StructField("Sentiment", StringType(), True),
+    StructField("PositiveScore", FloatType(), True), 
+    StructField("NeutralScore", FloatType(), True),
     StructField("NegativeScore", FloatType(), True)
 ])
 
 key_phrases_schema = StructType([
-    StructField("KeyPhraseId", StringType(), True), StructField("TranscriptionId", StringType(), True),
+    StructField("KeyPhraseId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
     StructField("KeyPhrase", StringType(), True)
 ])
 
@@ -635,6 +693,16 @@ try:
         print(f"⚠️ TABLE NOT FOUND: Lakehouse table '{PII_ENTITIES_TABLE}' does not exist.")
 except Exception as e:
     print(f"❌ Error reading from Lakehouse table '{PII_ENTITIES_TABLE}': {e}")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
 
 # METADATA ********************
 
