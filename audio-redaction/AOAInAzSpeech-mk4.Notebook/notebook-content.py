@@ -40,7 +40,7 @@
 
 # CELL ********************
 
-%pip install azure-cognitiveservices-speech openai
+%pip install azure-cognitiveservices-speech openai azure-keyvault-secrets azure-identity
 
 # METADATA ********************
 
@@ -74,11 +74,20 @@ from pyspark.sql.types import (
 from pyspark.sql.functions import col
 
 # Azure SDKs for a HYBRID approach
-import azure.cognitiveservices.speech as speechsdk # For Transcription and Diarization
-from openai import AzureOpenAI # For Analysis and Redaction
+import azure.cognitiveservices.speech as speechsdk 
+from openai import AzureOpenAI # <-- This line was missing
+
+# Fabric-specific utilities. 'notebookutils' is globally available but explicit import is good practice.
+from notebookutils import mssparkutils as notebookutils
 
 # Initialize Spark Session
 spark = SparkSession.builder.appName("HybridCallCenterAnalysis").getOrCreate()
+
+def format_duration_hms(seconds):
+    """Converts a duration in seconds to HH:MM:SS format."""
+    if seconds is None:
+        return "00:00:00"
+    return time.strftime('%H:%M:%S', time.gmtime(seconds))
 
 print("Spark session initialized and libraries imported. 🚀")
 
@@ -127,6 +136,16 @@ else:
 # META   "language_group": "synapse_pyspark"
 # META }
 
+# CELL ********************
+
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
 # MARKDOWN ********************
 
 # ---
@@ -135,27 +154,41 @@ else:
 
 # CELL ********************
 
-# --- Azure AI Speech Service Configurations (for Transcription & Diarization) ---
-# ⚠️ IMPORTANT: Store these securely (e.g., Azure Key Vault linked to Fabric)
-SPEECH_KEY = "GFKp197GdaN7nU7n9JnZUcOXfonE6GEiunq1QThQ68aeOYrTRkEeJQQJ99BFACMsfrFXJ3w3AAAAACOGemW6"
-SPEECH_REGION = "westus3"  # e.g., "eastus"
 
-# --- Azure OpenAI Service Configurations (for Analysis & Redaction) ---
-AZURE_OPENAI_API_KEY = "GFKp197GdaN7nU7n9JnZUcOXfonE6GEiunq1QThQ68aeOYrTRkEeJQQJ99BFACMsfrFXJ3w3AAAAACOGemW6"
-AZURE_OPENAI_ENDPOINT = "https://aif-wu3.openai.azure.com/"
-AZURE_OPENAI_GPT_DEPLOYMENT = "gpt-4.1" # Your GPT-4 or other chat model deployment name
 
-# --- Fabric Lakehouse Config ---
-LAKEHOUSE_NAME_FOR_TABLES = "bronze_aoai_lh" # 🚨 Replace with your Lakehouse name
+# --- Azure Key Vault Configuration ---
+key_vault_name = "akv-rjb-wu3-01"
+key_vault_uri = f"https://{key_vault_name}.vault.azure.net"
 
-# --- Fabric Lakehouse Path Configurations ---
+
+# --- Retrieve Secrets using Fabric's Native mssparkutils ---
+# This is the most direct and recommended method for Fabric notebooks.
+try:
+    print(f"Retrieving secrets from Azure Key Vault '{key_vault_name}' using mssparkutils...")
+    
+    SPEECH_KEY = notebookutils.credentials.getSecret(key_vault_uri, "SPEECH-KEY")
+    SPEECH_REGION = notebookutils.credentials.getSecret(key_vault_uri, "SPEECH-REGION")
+    AZURE_OPENAI_API_KEY = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-API-KEY")
+    AZURE_OPENAI_ENDPOINT = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-ENDPOINT")
+    AZURE_OPENAI_GPT_DEPLOYMENT = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-GPT-DEPLOYMENT")
+    
+    print("✅ Secrets retrieved successfully.")
+
+except Exception as e:
+    print(f"❌ Error retrieving secrets with notebookutils: {e}")
+    print("Please ensure the Key Vault name is correct and that both your user and the Fabric Workspace have the 'Key Vault Secrets User' role on the Key Vault.")
+    # Stop execution if secrets can't be retrieved
+    raise
+
+# --- Fabric Lakehouse Path Configurations (Unchanged) ---
 LAKEHOUSE_AUDIO_INPUT_DIR_RELATIVE = "Files/audio-files"
 LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE = "Files/transcripts"
 LAKEHOUSE_PROCESSED_AUDIO_DIR_RELATIVE = "Files/processed-audio"
 LAKEHOUSE_FAILED_AUDIO_DIR_RELATIVE = "Files/failed"
-LAKEHOUSE_SDK_LOGS_DIR_RELATIVE = "Files/sdk-logs" # <-- NEW: For verbose logs
+LAKEHOUSE_SDK_LOGS_DIR_RELATIVE = "Files/sdk-logs"
 
-# --- Fabric Lakehouse Table Configurations ---
+# --- Fabric Lakehouse Table Configurations (Unchanged) ---
+LAKEHOUSE_NAME_FOR_TABLES = "bronze_aoai_lh" 
 MAIN_TRANSCRIPTS_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcripts"
 TRANSCRIPTION_LOG_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcribe_log"
 PII_ENTITIES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.pii_entities"
@@ -163,26 +196,24 @@ TRANSCRIPT_PHRASES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcript_phrases"
 SENTENCE_SENTIMENTS_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.sentence_sentiments"
 KEY_PHRASES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.key_phrases"
 
-# --- Local Paths for Notebook Processing (via Lakehouse mount) ---
+# --- Local Paths for Notebook Processing (via Lakehouse mount) (Unchanged) ---
 LOCAL_LAKEHOUSE_ROOT = "/lakehouse/default/"
 LOCAL_AUDIO_INPUT_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_AUDIO_INPUT_DIR_RELATIVE)
 LOCAL_TRANSCRIPTS_OUTPUT_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE)
 LOCAL_PROCESSED_AUDIO_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_PROCESSED_AUDIO_DIR_RELATIVE)
 LOCAL_FAILED_AUDIO_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_FAILED_AUDIO_DIR_RELATIVE)
-LOCAL_SDK_LOGS_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_SDK_LOGS_DIR_RELATIVE) # <-- NEW: For verbose logs
+LOCAL_SDK_LOGS_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_SDK_LOGS_DIR_RELATIVE)
 
 # --- Initialize Azure OpenAI Client for Analysis ---
+# This part now uses the secrets fetched from Key Vault
 openai_client = None
 try:
-    if "YOUR_AZURE_OPENAI" in AZURE_OPENAI_API_KEY or "YOUR_AZURE_OPENAI" in AZURE_OPENAI_ENDPOINT:
-        print("⚠️ WARNING: Azure OpenAI key or endpoint is not set. Skipping analysis.")
-    else:
-        openai_client = AzureOpenAI(
-            api_key=AZURE_OPENAI_API_KEY,
-            api_version="2024-02-01",
-            azure_endpoint=AZURE_OPENAI_ENDPOINT
-        )
-        print("✅ Azure OpenAI client initialized successfully.")
+    openai_client = AzureOpenAI(
+        api_key=AZURE_OPENAI_API_KEY,
+        api_version="2024-02-01",
+        azure_endpoint=AZURE_OPENAI_ENDPOINT
+    )
+    print("✅ Azure OpenAI client initialized successfully using secrets from Key Vault.")
 except Exception as ex:
     print(f"❌ Error initializing Azure OpenAI client: {ex}")
 
@@ -190,7 +221,7 @@ except Exception as ex:
 os.makedirs(LOCAL_TRANSCRIPTS_OUTPUT_PATH, exist_ok=True)
 os.makedirs(LOCAL_PROCESSED_AUDIO_PATH, exist_ok=True)
 os.makedirs(LOCAL_FAILED_AUDIO_PATH, exist_ok=True)
-os.makedirs(LOCAL_SDK_LOGS_PATH, exist_ok=True) # <-- NEW: Create log directory
+os.makedirs(LOCAL_SDK_LOGS_PATH, exist_ok=True)
 print("Directory check complete.")
 
 # METADATA ********************
