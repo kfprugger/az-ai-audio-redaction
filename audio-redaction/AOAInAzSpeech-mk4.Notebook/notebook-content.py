@@ -606,7 +606,7 @@ def save_data_to_table(data_rows, table_name, schema, spark_session):
         try:
             print(f"\n📝 Attempting to write {len(data_rows)} records to '{table_name}'...")
             df = spark_session.createDataFrame(data=data_rows, schema=schema)
-            df.write.mode("append").format("delta").saveAsTable(table_name)
+            df.write.option("mergeSchema", "true").mode("append").format("delta").saveAsTable(table_name)
             print(f"✅ Successfully wrote {df.count()} records to '{table_name}'.")
         except Exception as e:
             print(f"❌ Error writing to table '{table_name}': {e}")
