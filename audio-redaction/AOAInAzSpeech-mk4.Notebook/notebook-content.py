@@ -136,16 +136,6 @@ else:
 # META   "language_group": "synapse_pyspark"
 # META }
 
-# CELL ********************
-
-
-# METADATA ********************
-
-# META {
-# META   "language": "python",
-# META   "language_group": "synapse_pyspark"
-# META }
-
 # MARKDOWN ********************
 
 # ---
@@ -369,6 +359,8 @@ def analyze_and_redact_with_gpt(client: AzureOpenAI, deployment: str, transcript
     3. "keyPhrases": A JSON array of strings, where each string is a key topic or phrase from the conversation.
     4. "piiEntities": A JSON array of objects. Each object represents a detected PII entity and must have the keys "text" (the original PII text), "category" (e.g., "Person", "PhoneNumber", "Address", "Email"), and "confidenceScore" (a float between 0.0 and 1.0).
     5. "sentenceSentiments": A JSON array of objects. Each object represents a sentence from the transcript and must have the keys "sentenceText", "sentiment" ("Positive", "Negative", "Neutral"), and "scores" (an object with "positive", "neutral", and "negative" float values).
+    6. "transcriptMainTopic": A string that succinctly summarizes the main topic or reason for the call in a few words (e.g., "Medication Refill Request", "Appointment Scheduling Inquiry", "Insurance Coverage Question").
+    7. "conversationType": A string that classifies the caller type. It must be one of these three exact values: "Patient", "Health Care Professional", or "Caregiver". Analyze the context to determine the most likely caller type.
 
     IMPORTANT: Pay special attention to PII that is spelled out loud (e.g., "My name is J-O-H-N S-M-I-T-H" or "J-A-M-E-S S-U-L-L-I-V-A-N"). You must identify the spelled-out text as PII and redact it correctly in the "piiRedactedText" field.
 
@@ -518,10 +510,16 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
                 # Populate data for Lakehouse tables
                 all_transcripts_rows.append({
-                    "TranscriptionId": transcription_id, "AudioFileName": audio_file, "ProcessingTimestamp": datetime.utcnow(), 
+                    "TranscriptionId": transcription_id, "AudioFileName": audio_file, "ProcessingTimestamp": datetime.utcnow(),
                     "ProcessingStatus": status, "CallDurationSeconds": duration_seconds, "CallDurationHms": duration_hms,
-                    "OverallSentiment": language_results.get("overallSentiment"), "PiiRedactedText": language_results.get("piiRedactedText"), 
-                    "TotalTokens": analysis_tokens, "LakehouseTranscriptPath": os.path.join(LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE, f"{os.path.splitext(audio_file)[0]}_enriched_transcript.json")
+                    "OverallSentiment": language_results.get("overallSentiment"),
+                    "PiiRedactedText": language_results.get("piiRedactedText"),
+                    # --- ADDED COLUMNS ---
+                    "TranscriptMainTopic": language_results.get("transcriptMainTopic", "N/A"),
+                    "ConversationType": language_results.get("conversationType", "Unknown"),
+                    # ---
+                    "TotalTokens": analysis_tokens,
+                    "LakehouseTranscriptPath": os.path.join(LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE, f"{os.path.splitext(audio_file)[0]}_enriched_transcript.json")
                 })
 
                 for entity in language_results.get("piiEntities", []):
@@ -628,15 +626,19 @@ log_schema = StructType([
 ])
 
 transcripts_schema = StructType([
-    StructField("TranscriptionId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
     StructField("AudioFileName", StringType(), True),
-    StructField("ProcessingTimestamp", TimestampType(), True), 
+    StructField("ProcessingTimestamp", TimestampType(), True),
     StructField("ProcessingStatus", StringType(), True),
-    StructField("CallDurationSeconds", DoubleType(), True), 
+    StructField("CallDurationSeconds", DoubleType(), True),
     StructField("CallDurationHms", StringType(), True),
-    StructField("OverallSentiment", StringType(), True), 
-    StructField("PiiRedactedText", StringType(), True), 
-    StructField("TotalTokens", LongType(), True), 
+    StructField("OverallSentiment", StringType(), True),
+    StructField("PiiRedactedText", StringType(), True),
+    # --- ADDED COLUMNS ---
+    StructField("TranscriptMainTopic", StringType(), True),
+    StructField("ConversationType", StringType(), True),
+    # ---
+    StructField("TotalTokens", LongType(), True),
     StructField("LakehouseTranscriptPath", StringType(), True)
 ])
 
@@ -705,8 +707,8 @@ try:
         df_transcripts = spark.read.table(MAIN_TRANSCRIPTS_TABLE)
         print(f"Total records in '{MAIN_TRANSCRIPTS_TABLE}': {df_transcripts.count()}")
         df_transcripts.select(
-            "AudioFileName", "ProcessingStatus", "CallDurationSeconds",
-            "OverallSentiment", "TotalTokens"
+            "AudioFileName", "ProcessingStatus", "OverallSentiment", 
+            "TranscriptMainTopic", "ConversationType", "TotalTokens"
         ).show(10, truncate=False)
     else:
         print(f"⚠️ TABLE NOT FOUND: Lakehouse table '{MAIN_TRANSCRIPTS_TABLE}' does not exist.")

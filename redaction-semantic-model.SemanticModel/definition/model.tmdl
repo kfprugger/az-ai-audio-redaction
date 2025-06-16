@@ -1,0 +1,26 @@
+model Model
+	culture: en-US
+	collation: Latin1_General_100_BIN2_UTF8
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: en-US
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation __PBI_TimeIntelligenceEnabled = 0
+
+annotation PBIDesktopVersion = 2.145.7692.4 (Main)+9e218fec77c33043950f105df46e999400bc0cc4
+
+annotation PBI_QueryOrder = ["DatabaseQuery"]
+
+annotation PBI_ProTooling = ["WebModelingEdit"]
+
+ref table transcribe_log
+ref table transcripts
+ref table sentence_sentiments
+ref table pii_entities
+ref table transcript_phrases
+ref table key_phrases
+
+ref cultureInfo en-US
+
