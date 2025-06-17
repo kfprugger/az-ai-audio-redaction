@@ -22,7 +22,6 @@
 
 # MARKDOWN ********************
 
-# Of course. This is an excellent next step in creating a secure data pipeline. We'll build a new notebook from scratch that takes the results from the first notebook and performs the audio redaction.
 # 
 # ### Notebook Summary
 # 
