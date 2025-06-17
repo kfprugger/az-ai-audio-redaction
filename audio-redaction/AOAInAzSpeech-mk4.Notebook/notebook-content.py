@@ -22,10 +22,6 @@
 
 # MARKDOWN ********************
 
-# Of course. The `NoMatchOrEmpty` error is often a symptom of an underlying connection issue, especially in secure enterprise environments. Activating verbose logging is the best way to confirm this.
-# 
-# I have updated the notebook to include two key changes:
-# 
 # 1.  **Verbose SDK Logging**: The notebook now automatically enables verbose logging for the Azure AI Speech SDK. The logs for each audio file will be saved to the `/lakehouse/default/Files/sdk-logs/` directory. These logs are crucial and will contain the specific details of any SSL/TLS handshake failures or other connection errors.
 # 
 # 2.  **SSL Certificate Prerequisite**: I have updated the section on handling SSL certificates to be more direct. It clarifies that if you are in a corporate environment, providing the correct SSL certificate file is often a **required** step, not an optional one.
