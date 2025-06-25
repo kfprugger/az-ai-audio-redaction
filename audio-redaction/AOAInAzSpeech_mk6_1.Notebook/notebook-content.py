@@ -400,6 +400,7 @@ def analyze_and_redact_with_gpt(client: AzureOpenAI, deployment: str, transcript
     7. "conversationType": A string that classifies the caller type. It must be one of these three exact values: "Patient", "Health Care Professional", or "Caregiver". Analyze the context to determine the most likely caller type.
 
     IMPORTANT: Pay special attention to PII that is spelled out loud (e.g., "My name is J-O-H-N S-M-I-T-H" or "J-A-M-E-S S-U-L-L-I-V-A-N"). You must identify the spelled-out text as PII and redact it correctly in the "piiRedactedText" field.
+    
 
     Analyze the following transcript carefully and provide the complete JSON output as requested.
     """
@@ -775,9 +776,9 @@ except Exception as e:
 
 # # 1. CONFIGURE: Set the name of your Lakehouse
 # # In Fabric, the Lakehouse name serves as the database name.
-# LAKEHOUSE_NAME = "bronze_aoai_lh"
+# # LAKEHOUSE_NAME = "bronze_aoai_lh"
 
-# print(f"--- Starting truncate process for all tables in Lakehouse: '{LAKEHOUSE_NAME}' ---")
+# # print(f"-- Starting truncate process for all tables in Lakehouse: '{LAKEHOUSE_NAME}' ---")
 # print("⚠️ WARNING: This is a destructive operation and will delete all rows from all tables.")
 
 # try:
@@ -808,6 +809,16 @@ except Exception as e:
 #     print(f"Please ensure the Lakehouse name is correct. Error: {e}")
 
 # print(f"\n--- Process complete. ---")
+
+# METADATA ********************
+
+# META {
+# META   "language": "python",
+# META   "language_group": "synapse_pyspark"
+# META }
+
+# CELL ********************
+
 
 # METADATA ********************
 

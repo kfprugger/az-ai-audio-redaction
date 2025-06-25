@@ -10,11 +10,11 @@ relationship 4e376a17-03c8-a7b1-c1cb-4b5afaaa596b
 	fromColumn: sentence_sentiments.TranscriptionId
 	toColumn: transcripts.TranscriptionId
 
-relationship 291a5e2e-a916-51ca-594d-9eaa0b07dcb8
-	fromColumn: transcribe_log.AudioFileName
-	toColumn: transcripts.AudioFileName
-
 relationship 69f22082-3cd7-5c79-d2a7-2de4a4eea343
 	fromColumn: transcript_phrases.TranscriptionId
 	toColumn: transcripts.TranscriptionId
+
+relationship 908c4819-b83c-5273-7711-d67e9af34d14
+	fromColumn: transcripts.TranscriptionId
+	toColumn: transcribe_log.TranscriptionId
 

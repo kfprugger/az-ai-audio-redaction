@@ -68,7 +68,7 @@ table transcribe_log
 		sourceProviderType: float
 		lineageTag: 72224b27-3134-4527-ac26-a8748ccfe16a
 		sourceLineageTag: TranscriptionTimeSeconds
-		summarizeBy: sum
+		summarizeBy: none
 		sourceColumn: TranscriptionTimeSeconds
 
 		annotation SummarizationSetBy = Automatic
@@ -80,7 +80,7 @@ table transcribe_log
 		sourceProviderType: float
 		lineageTag: 1ee4a15c-f737-4728-ac39-568db116c55f
 		sourceLineageTag: AnalysisTimeSeconds
-		summarizeBy: sum
+		summarizeBy: none
 		sourceColumn: AnalysisTimeSeconds
 
 		annotation SummarizationSetBy = Automatic
