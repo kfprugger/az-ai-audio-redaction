@@ -1,11 +1,12 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
   "metadata": {
-    "type": "Lakehouse",
-    "displayName": "bronze_azureai_lh"
+    "type": "Environment",
+    "displayName": "transcribeEnv",
+    "description": "Environment"
   },
   "config": {
     "version": "2.0",
-    "logicalId": "56e144a6-c7cc-8e6a-45cd-ca20848a99ae"
+    "logicalId": "564937f4-dbbc-80fe-42a8-004c8afb8e98"
   }
 }

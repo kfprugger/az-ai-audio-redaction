@@ -22,16 +22,35 @@
 
 # MARKDOWN ********************
 
-# 1.  **Verbose SDK Logging**: The notebook now automatically enables verbose logging for the Azure AI Speech SDK. The logs for each audio file will be saved to the `/lakehouse/default/Files/sdk-logs/` directory. These logs are crucial and will contain the specific details of any SSL/TLS handshake failures or other connection errors.
 # 
-# 2.  **SSL Certificate Prerequisite**: I have updated the section on handling SSL certificates to be more direct. It clarifies that if you are in a corporate environment, providing the correct SSL certificate file is often a **required** step, not an optional one.
 # 
-# Here is the complete notebook, formatted as it would appear in Jupyter. Below the formatted view, you will find the raw JSON for you to download and import.
+# -----
 # 
-# ***
+# ### **Hybrid AI Approach for Call Center Transcription and Analysis**
+# 
+# This notebook demonstrates a robust, hybrid AI solution for processing call center audio files. It leverages two distinct Azure AI services to achieve a comprehensive and accurate analysis that is both cost-effective and deterministic.
+# 
+# The process is as follows:
+# 
+# 1.  **Transcription and Diarization (Azure AI Speech):** The notebook first uses the Azure AI Speech service for transcription. This service is specifically chosen for its robust speaker diarization feature, which identifies and separates different speakers in the conversation (e.g., "Speaker 1," "Speaker 2"). This is a critical feature that Azure OpenAI's audio models do not currently support.
+# 2.  **Enrichment and Analysis (Azure OpenAI):** Once the raw transcript with speaker IDs is generated, the text is sent to a GPT model via the Azure OpenAI service. This service was selected because its powerful language models are superior for complex analytical tasks compared to the standard Azure AI Language service. The GPT model performs PII (Personally Identifiable Information) detection, sentiment analysis, key phrase extraction, and conversation classification.
+# 
+# This two-step, hybrid approach ensures high-quality speaker separation from the best-in-class service for that task, while using the superior analytical power of a large language model for enrichment, resulting in a more accurate and cost-effective end-to-end process.
+# 
+# -----
+# 
+# ### **TODO: Performance Enhancements**
+# 
+# The current implementation processes audio files one by one, which can be slow for large volumes. The initial transcription step is the primary bottleneck. Future development should focus on parallelizing this process to improve throughput. Two potential approaches are:
+# 
+# 1.  **Spark UDF with Pandas:** Refactor the transcription logic into a Spark User-Defined Function (UDF), possibly a Pandas UDF (Series to Series), to distribute the processing of audio files across all worker nodes in the Spark cluster.
+# 2.  **Azure Batch Transcription API:** Replace the real-time Speech SDK with the Azure Batch Transcription API. This service is specifically designed for transcribing large quantities of audio files asynchronously and is the more idiomatic and scalable solution for bulk processing.
+# 
+# -----
+# 
+# > **Cell Purpose:** This cell ensures the necessary Azure SDKs are installed for interacting with both Azure AI Speech (for transcription with speaker diarization) and Azure OpenAI (for analysis), as well as Azure Key Vault for securely accessing credentials.
 # 
 # ### **Cell 1: Install Required Libraries**
-# This cell ensures the necessary Azure SDKs for both Speech (for transcription with speaker ID) and OpenAI (for analysis) are installed.
 
 
 # CELL ********************
@@ -47,9 +66,11 @@
 
 # MARKDOWN ********************
 
-# ---
+# -----
+# 
+# > **Cell Purpose:** This cell imports all the required Python modules for file system interaction, data manipulation with Spark, and interfacing with the Azure AI Speech and Azure OpenAI SDKs. It also initializes the Spark session.
+# 
 # ### **Cell 2: Imports and Spark Initialization**
-# This cell imports all required modules for a hybrid AI approach—using both the Azure AI Speech SDK and the Azure OpenAI SDK—and initializes the Spark session.
 
 # CELL ********************
 
@@ -70,10 +91,10 @@ from pyspark.sql.types import (
 from pyspark.sql.functions import col
 
 # Azure SDKs for a HYBRID approach
-import azure.cognitiveservices.speech as speechsdk 
-from openai import AzureOpenAI # <-- This line was missing
+import azure.cognitiveservices.speech as speechsdk
+from openai import AzureOpenAI
 
-# Fabric-specific utilities. 'notebookutils' is globally available but explicit import is good practice.
+# Fabric-specific utilities
 from notebookutils import mssparkutils as notebookutils
 
 # Initialize Spark Session
@@ -96,9 +117,11 @@ print("Spark session initialized and libraries imported. 🚀")
 
 # MARKDOWN ********************
 
-# ---
-# ### **Cell 3: Critical Prerequisite for Corporate Environments: SSL Certificate**
-# This cell configures the environment to ensure the Speech SDK can find the default trusted CA certificates within the standard Microsoft Fabric Spark runtime. This is necessary to fix the underlying WS_OPEN_ERROR_UNDERLYING_IO_OPEN_FAILED error identified in the logs.
+# -----
+# 
+# > **Cell Purpose:** This cell is a critical prerequisite for corporate or secured environments. It configures the necessary SSL environment variables to point to the system's trusted CA certificate bundle. This prevents SSL/TLS handshake failures when the Python SDKs attempt to connect to Azure services through a proxy or firewall.
+# 
+# ### **Cell 3: Critical Prerequisite: SSL Certificate Configuration**
 
 # CELL ********************
 
@@ -113,12 +136,12 @@ print(f"Checking for bundle at: {ca_cert_path}")
 # Check if the standard certificate bundle exists at the expected path.
 if os.path.exists(ca_cert_path):
     print("System CA certificate bundle found. Setting SSL environment variables to point to it.")
-    
+
     # Set the environment variables for both the Speech SDK (SSL_CERT_FILE)
     # and other libraries like OpenAI (REQUESTS_CA_BUNDLE).
     os.environ["SSL_CERT_FILE"] = ca_cert_path
     os.environ["REQUESTS_CA_BUNDLE"] = ca_cert_path
-    
+
     print(f"✅ SSL_CERT_FILE is now set to: {os.environ.get('SSL_CERT_FILE')}")
     print(f"✅ REQUESTS_CA_BUNDLE is now set to: {os.environ.get('REQUESTS_CA_BUNDLE')}")
 else:
@@ -134,13 +157,13 @@ else:
 
 # MARKDOWN ********************
 
-# ---
+# -----
+# 
+# > **Cell Purpose:** This cell centralizes all configuration for the notebook. It securely retrieves credentials from Azure Key Vault using Fabric's `mssparkutils`, defines the input and output paths within the Lakehouse, and specifies the names for the target Delta tables where the results will be stored.
+# 
 # ### **Cell 4: Configuration**
-# This cell sets up all necessary configurations, including credentials, paths for input/output, and the names for the target Delta tables. It also defines the path for the new verbose SDK logs.
 
 # CELL ********************
-
-
 
 # --- Azure Key Vault Configuration ---
 key_vault_name = "akv-rjb-wu3-01"
@@ -151,13 +174,13 @@ key_vault_uri = f"https://{key_vault_name}.vault.azure.net"
 # This is the most direct and recommended method for Fabric notebooks.
 try:
     print(f"Retrieving secrets from Azure Key Vault '{key_vault_name}' using mssparkutils...")
-    
+
     SPEECH_KEY = notebookutils.credentials.getSecret(key_vault_uri, "SPEECH-KEY")
     SPEECH_REGION = notebookutils.credentials.getSecret(key_vault_uri, "SPEECH-REGION")
     AZURE_OPENAI_API_KEY = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-API-KEY")
     AZURE_OPENAI_ENDPOINT = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-ENDPOINT")
     AZURE_OPENAI_GPT_DEPLOYMENT = notebookutils.credentials.getSecret(key_vault_uri, "AZURE-OPENAI-GPT-DEPLOYMENT")
-    
+
     print("✅ Secrets retrieved successfully.")
 
 except Exception as e:
@@ -166,15 +189,15 @@ except Exception as e:
     # Stop execution if secrets can't be retrieved
     raise
 
-# --- Fabric Lakehouse Path Configurations (Unchanged) ---
+# --- Fabric Lakehouse Path Configurations ---
 LAKEHOUSE_AUDIO_INPUT_DIR_RELATIVE = "Files/audio-files"
 LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE = "Files/transcripts"
 LAKEHOUSE_PROCESSED_AUDIO_DIR_RELATIVE = "Files/processed-audio"
 LAKEHOUSE_FAILED_AUDIO_DIR_RELATIVE = "Files/failed"
 LAKEHOUSE_SDK_LOGS_DIR_RELATIVE = "Files/sdk-logs"
 
-# --- Fabric Lakehouse Table Configurations (Unchanged) ---
-LAKEHOUSE_NAME_FOR_TABLES = "bronze_aoai_lh" 
+# --- Fabric Lakehouse Table Configurations ---
+LAKEHOUSE_NAME_FOR_TABLES = "bronze_aoai_lh"
 MAIN_TRANSCRIPTS_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcripts"
 TRANSCRIPTION_LOG_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcribe_log"
 PII_ENTITIES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.pii_entities"
@@ -182,7 +205,7 @@ TRANSCRIPT_PHRASES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.transcript_phrases"
 SENTENCE_SENTIMENTS_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.sentence_sentiments"
 KEY_PHRASES_TABLE = f"{LAKEHOUSE_NAME_FOR_TABLES}.key_phrases"
 
-# --- Local Paths for Notebook Processing (via Lakehouse mount) (Unchanged) ---
+# --- Local Paths for Notebook Processing (via Lakehouse mount) ---
 LOCAL_LAKEHOUSE_ROOT = "/lakehouse/default/"
 LOCAL_AUDIO_INPUT_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_AUDIO_INPUT_DIR_RELATIVE)
 LOCAL_TRANSCRIPTS_OUTPUT_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE)
@@ -190,8 +213,22 @@ LOCAL_PROCESSED_AUDIO_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_PROCES
 LOCAL_FAILED_AUDIO_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_FAILED_AUDIO_DIR_RELATIVE)
 LOCAL_SDK_LOGS_PATH = os.path.join(LOCAL_LAKEHOUSE_ROOT, LAKEHOUSE_SDK_LOGS_DIR_RELATIVE)
 
+# --- NEW: Fabric Lakehouse ABFSS Path Configurations ---
+try:
+    workspace_id = notebookutils.runtime.context['currentWorkspaceId']
+    lakehouse_id = notebookutils.runtime.context['defaultLakehouseId']
+    LAKEHOUSE_ABFSS_ROOT = f"abfss://{workspace_id}@onelake.dfs.fabric.microsoft.com/{lakehouse_id}"
+    PROCESSED_AUDIO_ABFSS_PATH = f"{LAKEHOUSE_ABFSS_ROOT}/{LAKEHOUSE_PROCESSED_AUDIO_DIR_RELATIVE}"
+    FAILED_AUDIO_ABFSS_PATH = f"{LAKEHOUSE_ABFSS_ROOT}/{LAKEHOUSE_FAILED_AUDIO_DIR_RELATIVE}"
+    print(f"✅ Dynamically constructed ABFSS root path: {LAKEHOUSE_ABFSS_ROOT}")
+except Exception as e:
+    print(f"❌ Could not determine ABFSS paths dynamically. Error: {e}")
+    # Fallback or raise error if this path is critical
+    PROCESSED_AUDIO_ABFSS_PATH = "abfss://unknown"
+    FAILED_AUDIO_ABFSS_PATH = "abfss://unknown"
+
+
 # --- Initialize Azure OpenAI Client for Analysis ---
-# This part now uses the secrets fetched from Key Vault
 openai_client = None
 try:
     openai_client = AzureOpenAI(
@@ -219,9 +256,13 @@ print("Directory check complete.")
 
 # MARKDOWN ********************
 
-# ---
+# > **Cell Purpose:** This cell defines the core helper functions for the pipeline.
+# >
+# >   * `WavFileReaderCallback`: A class to stream audio data efficiently to the Speech SDK.
+# >   * `transcribe_audio_with_diarization`: The main function that calls the Azure AI Speech service. It's configured to enable speaker diarization and to save detailed SDK logs for debugging connection issues.
+# >   * `analyze_and_redact_with_gpt`: The function that calls the Azure OpenAI service with a detailed system prompt to perform PII redaction, sentiment analysis, key phrase extraction, and more.
+# 
 # ### **Cell 5: Helper Functions with Verbose Logging**
-# This cell defines the core functions. `transcribe_audio_with_diarization` has been modified to enable and save detailed SDK logs for each transcription attempt, which is essential for diagnosing connection issues.
 
 # CELL ********************
 
@@ -262,12 +303,12 @@ def transcribe_audio_with_diarization(speech_key, speech_region, local_audio_fil
     speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_region)
     speech_config.speech_recognition_language = "en-US"
 
-    # --- 💡 NEW: Enable verbose SDK logging to a file ---
+    # --- Enable verbose SDK logging to a file ---
     log_file_path = os.path.join(LOCAL_SDK_LOGS_PATH, f"speech-sdk-{os.path.splitext(audio_filename)[0]}.log")
     speech_config.set_property(speechsdk.PropertyId.Speech_LogFilename, log_file_path)
     print(f"  [DEBUG] Verbose SDK logging enabled. Log file: {log_file_path}")
 
-    # --- FIX: Explicitly enable diarization for the ConversationTranscriber ---
+    # --- Explicitly enable diarization for the ConversationTranscriber ---
     speech_config.set_service_property(
         name='speech.diarization.enabled',
         value='true',
@@ -385,15 +426,6 @@ def analyze_and_redact_with_gpt(client: AzureOpenAI, deployment: str, transcript
         print(f"  [ERROR] An error occurred during GPT analysis: {e}")
         return {"analysis": {"PiiRedactedText": "Error during analysis", "OverallSentiment": "Error", "KeyPhrases": [], "PiiEntities": [], "SentencesSentiment": [], "ErrorDetails": str(e)}, "tokens": 0}
 
-
-def format_duration_hms(seconds):
-    """Converts a duration in seconds to HH:MM:SS format."""
-    if seconds is None:
-        return "00:00:00"
-    return time.strftime('%H:%M:%S', time.gmtime(seconds))
-
-print("Helper function 'format_duration_hms' is defined.")
-
 # METADATA ********************
 
 # META {
@@ -403,9 +435,11 @@ print("Helper function 'format_duration_hms' is defined.")
 
 # MARKDOWN ********************
 
-# ---
+# -----
+# 
+# > **Cell Purpose:** This cell is the main orchestrator for the entire pipeline. It lists the audio files in the input directory, checks against a log table to skip any files that have already been processed successfully, and then iterates through each new file, calling the transcription and analysis functions. Finally, it moves the processed files to either a "processed" or "failed" directory.
+# 
 # ### **Cell 6: Main Processing Loop**
-# This cell orchestrates the entire process. It checks for previously processed files, then calls the transcription and analysis functions for each new audio file.
 
 # CELL ********************
 
@@ -453,12 +487,16 @@ with tempfile.TemporaryDirectory() as temp_dir:
             start_transcribe_time = time.time()
             speech_results = transcribe_audio_with_diarization(SPEECH_KEY, SPEECH_REGION, temp_audio_file)
             transcription_time_seconds = time.time() - start_transcribe_time
-            
+
             status = speech_results.get("ProcessingStatus", "UnknownError")
             is_successful = (status == "Success")
             status_details = json.dumps(speech_results.get("CancellationDetails")) if speech_results.get("CancellationDetails") else None
             duration_seconds = speech_results.get("TotalDurationInSeconds", 0.0)
             duration_hms = format_duration_hms(duration_seconds)
+
+            # --- NEW: Determine final ABFSS path for logging ---
+            final_audio_location_abfss = f"{PROCESSED_AUDIO_ABFSS_PATH}/{audio_file}" if is_successful else f"{FAILED_AUDIO_ABFSS_PATH}/{audio_file}"
+
 
             # If Successful, Perform Enrichment
             if is_successful:
@@ -476,46 +514,17 @@ with tempfile.TemporaryDirectory() as temp_dir:
                 else:
                     print("  [WARN] OpenAI client is not configured. Skipping analysis.")
 
-                # --- NEW: Create detailed PII list with timestamps ---
-                pii_details_with_timestamps = []
-                # Iterate through each PII entity found by the language model
-                for entity in language_results.get("piiEntities", []):
-                    pii_text = entity.get("text")
-                    if not pii_text:
-                        continue
-                    
-                    # Search for the phrase where this PII text appeared
-                    for phrase in speech_results.get("RecognizedPhrases", []):
-                        if pii_text in phrase.get("Text", ""):
-                            # Found the phrase, now build the desired object
-                            pii_details_with_timestamps.append({
-                                "SpeakerId": phrase.get("SpeakerId"),
-                                "PiiText": pii_text,
-                                "OffsetInTicks": phrase.get("OffsetInTicks"),
-                                "DurationInTicks": phrase.get("DurationInTicks"),
-                                "Confidence": entity.get("confidenceScore"),
-                                "PiiCategory": entity.get("category"),
-                                "AiDetectionModelUsed": "GPT"
-                            })
-                            # Once found, break to avoid creating duplicates for the same PII entity
-                            break 
-                
-                # Add the new detailed list to the analysis results
-                language_results["PiiDetailsWithTimestamps"] = pii_details_with_timestamps
-                print(f"  [INFO] Created {len(pii_details_with_timestamps)} detailed records for PII entities.")
-
                 # Populate data for Lakehouse tables
                 all_transcripts_rows.append({
                     "TranscriptionId": transcription_id, "AudioFileName": audio_file, "ProcessingTimestamp": datetime.utcnow(),
                     "ProcessingStatus": status, "CallDurationSeconds": duration_seconds, "CallDurationHms": duration_hms,
                     "OverallSentiment": language_results.get("overallSentiment"),
                     "PiiRedactedText": language_results.get("piiRedactedText"),
-                    # --- ADDED COLUMNS ---
                     "TranscriptMainTopic": language_results.get("transcriptMainTopic", "N/A"),
                     "ConversationType": language_results.get("conversationType", "Unknown"),
-                    # ---
                     "TotalTokens": analysis_tokens,
-                    "LakehouseTranscriptPath": os.path.join(LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE, f"{os.path.splitext(audio_file)[0]}_enriched_transcript.json")
+                    "LakehouseTranscriptPath": os.path.join(LAKEHOUSE_TRANSCRIPTS_OUTPUT_DIR_RELATIVE, f"{os.path.splitext(audio_file)[0]}_enriched_transcript.json"),
+                    "ProcessedAudioLakehousePath": final_audio_location_abfss # MODIFIED: Added ABFSS path
                 })
 
                 for entity in language_results.get("piiEntities", []):
@@ -532,8 +541,8 @@ with tempfile.TemporaryDirectory() as temp_dir:
 
                 # Save the full enriched JSON file
                 full_json_output = {
-                    "transcription": speech_results, 
-                    "analysis": language_results, 
+                    "transcription": speech_results,
+                    "analysis": language_results,
                     "usage": {
                         "analysis_total_tokens": analysis_tokens,
                         "transcription_time_seconds": transcription_time_seconds,
@@ -550,24 +559,28 @@ with tempfile.TemporaryDirectory() as temp_dir:
             # Log the final outcome
             print(f"  [LOG] Recording outcome for '{audio_file}'. Status: {status}")
             all_log_rows.append({
-                "TranscriptionId": transcription_id, "AudioFileName": audio_file, 
-                "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": status, 
+                "TranscriptionId": transcription_id, "AudioFileName": audio_file,
+                "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": status,
                 "StatusDetails": status_details, "CallDurationHms": duration_hms,
                 "TranscriptionTimeSeconds": transcription_time_seconds,
-                "AnalysisTimeSeconds": analysis_time_seconds
+                "AnalysisTimeSeconds": analysis_time_seconds,
+                "ProcessedAudioLakehousePath": final_audio_location_abfss # MODIFIED: Added ABFSS path
             })
 
         except Exception as e:
             print(f"  ❌ An unhandled error occurred for {audio_file}: {e}")
+            is_successful = False # Ensure is_successful is false on hard error
+            # MODIFIED: Determine path for logging even on hard error
+            final_audio_location_abfss_on_error = f"{FAILED_AUDIO_ABFSS_PATH}/{audio_file}"
             if not any(log['AudioFileName'] == audio_file for log in all_log_rows):
-                all_log_rows.append({ 
-                    "TranscriptionId": str(uuid.uuid4()), "AudioFileName": audio_file, 
-                    "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": "PythonHardError", 
+                all_log_rows.append({
+                    "TranscriptionId": str(uuid.uuid4()), "AudioFileName": audio_file,
+                    "ProcessingTimestamp": datetime.utcnow(), "ProcessingStatus": "PythonHardError",
                     "StatusDetails": json.dumps({"error": str(e)}), "CallDurationHms": "00:00:00",
                     "TranscriptionTimeSeconds": transcription_time_seconds,
-                    "AnalysisTimeSeconds": analysis_time_seconds
+                    "AnalysisTimeSeconds": analysis_time_seconds,
+                    "ProcessedAudioLakehousePath": final_audio_location_abfss_on_error # MODIFIED: Added ABFSS path
                 })
-            is_successful = False
 
         finally:
             destination_dir = LOCAL_PROCESSED_AUDIO_PATH if is_successful else LOCAL_FAILED_AUDIO_PATH
@@ -577,9 +590,9 @@ with tempfile.TemporaryDirectory() as temp_dir:
                 print(f"  [ERROR] Failed to move file '{audio_file}': {move_error}")
 
 if not audio_files_to_process:
-    print("\n🏁 No new files to process. All files in the input directory have already been successfully processed.")
+    print(f"\n🏁 No new files to process. All files in the input directory have already been successfully processed.")
 else:
-    print("\n🏁 Finished processing all new files. Preparing to write to Lakehouse tables.")
+    print(f"\n🏁 Finished processing all new files. Preparing to write to Lakehouse tables.")
 
 # METADATA ********************
 
@@ -590,9 +603,11 @@ else:
 
 # MARKDOWN ********************
 
-# ---
+# -----
+# 
+# > **Cell Purpose:** This cell is responsible for persisting the results. It defines the schema for each of the six target Delta tables and then calls a helper function to convert the in-memory lists of results into Spark DataFrames and write them to the Lakehouse, appending the new data.
+# 
 # ### **Cell 7: Write DataFrames to Lakehouse Tables**
-# This cell converts the lists of results into Spark DataFrames and writes each one to its corresponding Delta table.
 
 # CELL ********************
 
@@ -609,18 +624,21 @@ def save_data_to_table(data_rows, table_name, schema, spark_session):
     else:
         print(f"\nℹ️ No new data to write to table '{table_name}'.")
 
-# --- MODIFIED: Define Schemas ---
+# --- Define Schemas ---
+# MODIFIED: Added ProcessedAudioLakehousePath to log_schema
 log_schema = StructType([
-    StructField("TranscriptionId", StringType(), True), 
+    StructField("TranscriptionId", StringType(), True),
     StructField("AudioFileName", StringType(), True),
-    StructField("ProcessingTimestamp", TimestampType(), True), 
+    StructField("ProcessingTimestamp", TimestampType(), True),
     StructField("ProcessingStatus", StringType(), True),
-    StructField("StatusDetails", StringType(), True), 
+    StructField("StatusDetails", StringType(), True),
     StructField("CallDurationHms", StringType(), True),
-    StructField("TranscriptionTimeSeconds", DoubleType(), True), # <-- Added
-    StructField("AnalysisTimeSeconds", DoubleType(), True)      # <-- Added
+    StructField("TranscriptionTimeSeconds", DoubleType(), True),
+    StructField("AnalysisTimeSeconds", DoubleType(), True),
+    StructField("ProcessedAudioLakehousePath", StringType(), True)
 ])
 
+# MODIFIED: Added ProcessedAudioLakehousePath to transcripts_schema
 transcripts_schema = StructType([
     StructField("TranscriptionId", StringType(), True),
     StructField("AudioFileName", StringType(), True),
@@ -630,45 +648,44 @@ transcripts_schema = StructType([
     StructField("CallDurationHms", StringType(), True),
     StructField("OverallSentiment", StringType(), True),
     StructField("PiiRedactedText", StringType(), True),
-    # --- ADDED COLUMNS ---
     StructField("TranscriptMainTopic", StringType(), True),
     StructField("ConversationType", StringType(), True),
-    # ---
     StructField("TotalTokens", LongType(), True),
-    StructField("LakehouseTranscriptPath", StringType(), True)
+    StructField("LakehouseTranscriptPath", StringType(), True),
+    StructField("ProcessedAudioLakehousePath", StringType(), True)
 ])
 
 pii_schema = StructType([
-    StructField("PiiEntityId", StringType(), True), 
+    StructField("PiiEntityId", StringType(), True),
     StructField("TranscriptionId", StringType(), True),
-    StructField("PiiText", StringType(), True), 
+    StructField("PiiText", StringType(), True),
     StructField("PiiCategory", StringType(), True),
-    StructField("PiiSubcategory", StringType(), True), 
+    StructField("PiiSubcategory", StringType(), True),
     StructField("ConfidenceScore", FloatType(), True)
 ])
 
 phrases_schema = StructType([
-    StructField("PhraseId", StringType(), True), 
+    StructField("PhraseId", StringType(), True),
     StructField("TranscriptionId", StringType(), True),
-    StructField("SpeakerId", StringType(), True), 
+    StructField("SpeakerId", StringType(), True),
     StructField("PhraseText", StringType(), True),
-    StructField("OffsetInSeconds", DoubleType(), True), 
+    StructField("OffsetInSeconds", DoubleType(), True),
     StructField("DurationInSeconds", DoubleType(), True),
     StructField("Confidence", FloatType(), True)
 ])
 
 sentence_sentiments_schema = StructType([
-    StructField("SentenceId", StringType(), True), 
+    StructField("SentenceId", StringType(), True),
     StructField("TranscriptionId", StringType(), True),
-    StructField("SentenceText", StringType(), True), 
+    StructField("SentenceText", StringType(), True),
     StructField("Sentiment", StringType(), True),
-    StructField("PositiveScore", FloatType(), True), 
+    StructField("PositiveScore", FloatType(), True),
     StructField("NeutralScore", FloatType(), True),
     StructField("NegativeScore", FloatType(), True)
 ])
 
 key_phrases_schema = StructType([
-    StructField("KeyPhraseId", StringType(), True), 
+    StructField("KeyPhraseId", StringType(), True),
     StructField("TranscriptionId", StringType(), True),
     StructField("KeyPhrase", StringType(), True)
 ])
@@ -690,21 +707,23 @@ save_data_to_table(all_key_phrases_rows, KEY_PHRASES_TABLE, key_phrases_schema, 
 
 # MARKDOWN ********************
 
-# ---
+# -----
+# 
+# > **Cell Purpose:** This optional cell allows you to run simple Spark SQL queries against the final Delta tables to quickly verify that the data was written correctly and inspect the results.
+# 
 # ### **Cell 8: Verification (Optional)**
-# Query the main tables to verify the data was written correctly.
 
 # CELL ********************
 
-# Verify data in the main transcript and PII tables
+# MODIFIED: Updated selection to include the new ProcessedAudioLakehousePath column
 print(f"\n🔍 Verifying data in the main Lakehouse table: {MAIN_TRANSCRIPTS_TABLE}")
 try:
     if spark.catalog.tableExists(MAIN_TRANSCRIPTS_TABLE):
         df_transcripts = spark.read.table(MAIN_TRANSCRIPTS_TABLE)
         print(f"Total records in '{MAIN_TRANSCRIPTS_TABLE}': {df_transcripts.count()}")
         df_transcripts.select(
-            "AudioFileName", "ProcessingStatus", "OverallSentiment", 
-            "TranscriptMainTopic", "ConversationType", "TotalTokens"
+            "AudioFileName", "ProcessingStatus", "OverallSentiment",
+            "TranscriptMainTopic", "ConversationType", "ProcessedAudioLakehousePath"
         ).show(10, truncate=False)
     else:
         print(f"⚠️ TABLE NOT FOUND: Lakehouse table '{MAIN_TRANSCRIPTS_TABLE}' does not exist.")
@@ -723,6 +742,21 @@ try:
 except Exception as e:
     print(f"❌ Error reading from Lakehouse table '{PII_ENTITIES_TABLE}': {e}")
 
+# NEW: Added verification for the log table to show the new column
+print(f"\n🔍 Verifying data in the log table: {TRANSCRIPTION_LOG_TABLE}")
+try:
+    if spark.catalog.tableExists(TRANSCRIPTION_LOG_TABLE):
+        df_log = spark.read.table(TRANSCRIPTION_LOG_TABLE)
+        print(f"Total records in '{TRANSCRIPTION_LOG_TABLE}': {df_log.count()}")
+        df_log.select(
+            "AudioFileName", "ProcessingStatus", "StatusDetails",
+            "ProcessedAudioLakehousePath"
+        ).show(10, truncate=False)
+    else:
+        print(f"⚠️ TABLE NOT FOUND: Lakehouse table '{TRANSCRIPTION_LOG_TABLE}' does not exist.")
+except Exception as e:
+    print(f"❌ Error reading from Lakehouse table '{TRANSCRIPTION_LOG_TABLE}': {e}")
+
 # METADATA ********************
 
 # META {
@@ -730,8 +764,50 @@ except Exception as e:
 # META   "language_group": "synapse_pyspark"
 # META }
 
+# MARKDOWN ********************
+
+# # DEV Cell: Truncate all tables and start over
+# Run this notebook if you want to empty out all the tables in the lakehouse but keep the schemas (TRUNCATE). 
+# 
+# Comment out if running the entire notebook. 
+
 # CELL ********************
 
+# # 1. CONFIGURE: Set the name of your Lakehouse
+# # In Fabric, the Lakehouse name serves as the database name.
+# LAKEHOUSE_NAME = "bronze_aoai_lh"
+
+# print(f"--- Starting truncate process for all tables in Lakehouse: '{LAKEHOUSE_NAME}' ---")
+# print("⚠️ WARNING: This is a destructive operation and will delete all rows from all tables.")
+
+# try:
+#     # 2. ENUMERATE: Get a list of all tables in the specified Lakehouse
+#     tables_list = spark.catalog.listTables(LAKEHOUSE_NAME)
+
+#     # Filter for only managed tables, ignoring any views
+#     managed_tables = [table for table in tables_list if table.tableType == 'MANAGED']
+
+#     if not managed_tables:
+#         print(f"\nNo managed tables found in '{LAKEHOUSE_NAME}'. Nothing to do.")
+#     else:
+#         print(f"\nFound {len(managed_tables)} tables to truncate.")
+        
+#         # 3. LOOP and TRUNCATE: Iterate through each table and delete all its rows
+#         for table in managed_tables:
+#             full_table_name = f"`{table.database}`.`{table.name}`"
+#             print(f"  > Truncating table: {full_table_name}...")
+            
+#             try:
+#                 spark.sql(f"TRUNCATE TABLE {full_table_name}")
+#                 print(f"    ✅ Success.")
+#             except Exception as e:
+#                 print(f"    ❌ FAILED to truncate {full_table_name}. Error: {e}")
+
+# except Exception as e:
+#     print(f"\n❌ An error occurred trying to list tables for Lakehouse '{LAKEHOUSE_NAME}'.")
+#     print(f"Please ensure the Lakehouse name is correct. Error: {e}")
+
+# print(f"\n--- Process complete. ---")
 
 # METADATA ********************
 
